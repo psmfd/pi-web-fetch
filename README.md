@@ -4,11 +4,11 @@
 
 ## Purpose
 
-Several subagents — `security-review-expert`, `code-review-expert`, `shell-expert`, the cloud and infra specialists, language specialists, container/orchestration specialists, and `docs-expert` — claim in their descriptions that they cite first-party documentation. Prior to this extension they could not: pi 0.75.4 ships only `read`, `bash`, `edit`, `write` built-ins, and the bare `web` tool listed in those wrappers' `tools:` frontmatter was a silent no-op (root cause tracked in [#152](https://github.com/TheSemicolon/pi_config/issues/152)). The result was opus-pinned reviewers citing from cached model knowledge and flagging claims as "not corroborated" when challenged.
+Several subagents — `security-review-expert`, `code-review-expert`, `shell-expert`, the cloud and infra specialists, language specialists, container/orchestration specialists, and `docs-expert` — claim in their descriptions that they cite first-party documentation. Prior to this extension they could not: pi 0.75.4 ships only `read`, `bash`, `edit`, `write` built-ins, and the bare `web` tool listed in those wrappers' `tools:` frontmatter was a silent no-op (root cause tracked in #152). The result was opus-pinned reviewers citing from cached model knowledge and flagging claims as "not corroborated" when challenged.
 
 `web_fetch(url, accept?)` performs an HTTPS GET against an operator-curated allowlist of first-party documentation hosts and returns the response body (≤256 KB). It is read-only, requires no credentials, and is the only network-capable tool in `agent/extensions/`.
 
-Tracking issue: [#151](https://github.com/TheSemicolon/pi_config/issues/151). Substrate decision: [ADR-0015](../../../adrs/0015-network-capable-extensions-and-the-first-party-docs-allowlist.md).
+Tracking issue: #151. Substrate decision: [ADR-0015](https://github.com/psmfd/pi-config/blob/main/adrs/0015-network-capable-extensions-and-the-first-party-docs-allowlist.md).
 
 ## Security boundary
 
@@ -114,7 +114,7 @@ The full list lives in `index.ts` `ALLOWED_HOSTS`. Coverage matrix at the time o
 `github.com` is a load-bearing host (upstream pi source, ADR references, real-world repo links) but also a high user-content surface — any repo can host arbitrary markdown, and `raw.githubusercontent.com` returns raw file contents from any public repo. We accept this trade-off for v1 because:
 
 1. The agent is already reading user-content-shaped material (the working copy, issue bodies). `github.com` doesn't materially expand the attack surface beyond what `read` already exposes.
-2. Restricting to specific repos (`github.com/earendil-works/pi`, `github.com/TheSemicolon/pi_config`) would require path-prefix matching, which `URL.host` doesn't support; we'd need to compare `URL.pathname` separately. Tractable but adds complexity. Revisit if abuse surfaces.
+2. Restricting to specific repos (`github.com/earendil-works/pi`, `github.com/psmfd/pi-config`) would require path-prefix matching, which `URL.host` doesn't support; we'd need to compare `URL.pathname` separately. Tractable but adds complexity. Revisit if abuse surfaces.
 
 If a future incident motivates tightening, the path-prefix approach is the upgrade path.
 
@@ -138,12 +138,12 @@ The redirect re-validation loop (every hop's host is re-checked against `ALLOWED
 
 - **`secrets-guard/`**: `web_fetch` is read-only and writes nothing to disk. No secrets-guard coverage is needed — the tool cannot exfiltrate via committed files. Content surfaced to the model is bounded by the host allowlist.
 - **`bash-destructive-guard/`**: no interaction — `web_fetch` does not invoke shell.
-- **`subagent/`**: subagents that need `web_fetch` must list it in their `tools:` frontmatter. Per [#152](https://github.com/TheSemicolon/pi_config/issues/152), unknown tool names in that frontmatter are currently dropped silently; a future patch will warn or fail.
+- **`subagent/`**: subagents that need `web_fetch` must list it in their `tools:` frontmatter. Per #152, unknown tool names in that frontmatter are currently dropped silently; a future patch will warn or fail.
 - **`artifact-handoff/`**: no interaction — separate concerns.
 
 ## What this extension explicitly does NOT do
 
-- **No search.** There is no `web_search` tool. Agents must know the URL or follow links inside fetched documents. This is a deliberate scope boundary; the design implications of adding search (allowlist erosion via attacker-influenced URL discovery, query exfiltration to a third-party search provider, citation-replay break) are documented in [ADR-0015](../../../adrs/0015-network-capable-extensions-and-the-first-party-docs-allowlist.md) § Rejected.
+- **No search.** There is no `web_search` tool. Agents must know the URL or follow links inside fetched documents. This is a deliberate scope boundary; the design implications of adding search (allowlist erosion via attacker-influenced URL discovery, query exfiltration to a third-party search provider, citation-replay break) are documented in [ADR-0015](https://github.com/psmfd/pi-config/blob/main/adrs/0015-network-capable-extensions-and-the-first-party-docs-allowlist.md) § Rejected.
 - **No browser automation.** Static `fetch` only — no JavaScript execution, no DOM, no cookies, no session state.
 - **No authenticated fetches.** No credentials are read, stored, or sent. Documentation lookup is out of any reasonable auth threat model.
 - **No `http:`, `file:`, or `data:` URLs.** HTTPS only.
@@ -169,7 +169,7 @@ Expected: tool result `web_fetch: refusing 'https://example.com/' — host 'exam
 
 ## References
 
-- Tracking issue: [#151](https://github.com/TheSemicolon/pi_config/issues/151)
-- ADR: [ADR-0015](../../../adrs/0015-network-capable-extensions-and-the-first-party-docs-allowlist.md)
-- Related follow-ups: [#152](https://github.com/TheSemicolon/pi_config/issues/152) (subagent unknown-tool diagnosability), [#153](https://github.com/TheSemicolon/pi_config/issues/153) (research-subagent issue-body access)
+- Tracking issue: #151
+- ADR: [ADR-0015](https://github.com/psmfd/pi-config/blob/main/adrs/0015-network-capable-extensions-and-the-first-party-docs-allowlist.md)
+- Related follow-ups: #152 (subagent unknown-tool diagnosability), #153 (research-subagent issue-body access)
 - Extension API: `~/.cache/pi_config/pi-v0.75.5/pi/docs/extensions.md`
