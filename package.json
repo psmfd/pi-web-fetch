@@ -1,25 +1,30 @@
 {
-	"name": "@psmfd/pi-web-fetch",
-	"version": "0.1.0",
-	"description": "Pi extension: registers a read-only HTTPS web_fetch tool gated by a curated first-party-documentation host allowlist",
-	"type": "module",
-	"license": "MIT",
-	"repository": "github:psmfd/pi-web-fetch",
-	"keywords": ["pi", "pi-extension"],
-	"pi": {
-		"extensions": ["./index.ts"]
-	},
-	"scripts": {
-		"typecheck": "tsc --noEmit"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": ">=0.75",
-		"typebox": ">=1"
-	},
-	"devDependencies": {
-		"@earendil-works/pi-coding-agent": "0.80.2",
-		"@types/node": "^25.9.3",
-		"typebox": "^1.2.9",
-		"typescript": "^6.0.3"
-	}
+  "name": "@psmfd/pi-web-fetch",
+  "version": "0.1.1",
+  "description": "Pi extension: registers a read-only HTTPS web_fetch tool gated by a curated first-party-documentation host allowlist",
+  "type": "module",
+  "license": "MIT",
+  "repository": "github:psmfd/pi-web-fetch",
+  "keywords": [
+    "pi",
+    "pi-extension"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.75",
+    "typebox": ">=1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.2",
+    "@types/node": "^25.9.3",
+    "typebox": "^1.2.9",
+    "typescript": "^6.0.3"
+  }
 }

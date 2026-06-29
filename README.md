@@ -2,6 +2,14 @@
 
 > **First-party** to this repo. Registers the `web_fetch` tool used by research-specialist subagents to corroborate findings against authoritative first-party documentation.
 
+## Install
+
+```sh
+pi install git:github.com/psmfd/pi-web-fetch
+```
+
+Try it first without installing: `pi -e git:github.com/psmfd/pi-web-fetch`.
+
 ## Purpose
 
 Several subagents — `security-review-expert`, `code-review-expert`, `shell-expert`, the cloud and infra specialists, language specialists, container/orchestration specialists, and `docs-expert` — claim in their descriptions that they cite first-party documentation. Prior to this extension they could not: pi 0.75.4 ships only `read`, `bash`, `edit`, `write` built-ins, and the bare `web` tool listed in those wrappers' `tools:` frontmatter was a silent no-op (root cause tracked in #152). The result was opus-pinned reviewers citing from cached model knowledge and flagging claims as "not corroborated" when challenged.
