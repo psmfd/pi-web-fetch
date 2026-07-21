@@ -1,6 +1,6 @@
 {
   "name": "@psmfd/pi-web-fetch",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pi extension: registers a read-only HTTPS web_fetch tool gated by a curated first-party-documentation host allowlist",
   "type": "module",
   "license": "MIT",

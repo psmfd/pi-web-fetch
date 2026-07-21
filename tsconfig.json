@@ -20,5 +20,5 @@
 		"noImplicitReturns": true,
 		"exactOptionalPropertyTypes": false
 	},
-	"include": ["index.ts"]
+	"include": ["*.ts", "test/**/*.ts"]
 }

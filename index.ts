@@ -5,9 +5,9 @@
  * (security-review-expert, code-review-expert, shell-expert, aws-expert,
  * azure-infra-expert, azure-devops-expert, dotnet-expert, docker-expert,
  * helm-expert, tauri-expert, ansible-expert, hyperv-expert, wsl2-expert,
- * vcluster-expert, pi-agent-expert, docs-expert) to fetch
- * first-party documentation and corroborate findings against authoritative
- * sources.
+ * vcluster-expert, pi-agent-expert, docs-expert, checkmarx-expert,
+ * gh-cli-expert, gitflow-expert, linter) to fetch first-party
+ * documentation and corroborate findings against authoritative sources.
  *
  * Security boundary: a tight, operator-curated allowlist of first-party
  * documentation hosts. Anything not on the allowlist is refused. Adding a
@@ -37,7 +37,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-const MAX_BODY_BYTES = 262144; // 256 KB
+export const MAX_BODY_BYTES = 262144; // 256 KB
+// Defense-in-depth ceiling (8× the truncation cap): the largest response body
+// web_fetch will buffer before refusing. Bounds memory pressure from a
+// misbehaving or compromised allowlisted host (Content-Length pre-check +
+// mid-stream streaming guard, both in readBodyBounded).
+export const HARD_BYTE_CEILING = MAX_BODY_BYTES * 8; // 2 MB
 const MAX_REDIRECTS = 3;
 const DEFAULT_ACCEPT = "text/html,text/plain,application/xhtml+xml,*/*;q=0.8";
 const USER_AGENT = "pi-web-fetch/1.0 (+https://github.com/psmfd/pi-web-fetch)";
@@ -52,7 +57,7 @@ const USER_AGENT = "pi-web-fetch/1.0 (+https://github.com/psmfd/pi-web-fetch)";
  * to `<allowed-host>:8443` is refused — the default `:443` is stripped by
  * the URL parser, so canonical entries (no port) match as expected.
  */
-const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
+export const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   // ADR (MADR template — adr-required rule)
   "adr.github.io",
   // Ansible
@@ -70,9 +75,6 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   "docs.aws.amazon.com",
   // AWS re:Post (vendor-operated Q&A forum; replaces AWS Developer Forums)
   "repost.aws",
-  // Canonical (Ubuntu / Multipass / LXD / MAAS / snap / juju marketing +
-  // install surface; deep docs live at documentation.ubuntu.com)
-  "canonical.com",
   // Checkmarx (SAST/SCA/IaC scanner; checkmarx-expert)
   "docs.checkmarx.com",
   // Conventional Commits (spec referenced by conventional-commits rule)
@@ -81,15 +83,10 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   "www.cve.org",
   // Docker
   "docs.docker.com",
-  // Documentation.Ubuntu.com (Canonical's tightly-scoped first-party docs
-  // surface; multipass.run/docs and canonical.com/<product>/docs redirect here)
-  "documentation.ubuntu.com",
   // .NET (release/SDK/lifecycle metadata; prose docs live on learn.microsoft.com)
   "dotnet.microsoft.com",
   // ESLint (rule reference + flat-config docs; linter and TS extension tooling)
   "eslint.org",
-  // Firecracker (AWS microVM; first-party docs site is on github.io)
-  "firecracker-microvm.github.io",
   // freedesktop
   "freedesktop.org",
   "specifications.freedesktop.org",
@@ -116,8 +113,6 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   "www.rfc-editor.org",
   // JSON Schema (vocabulary + validation semantics; settings.schema.json)
   "json-schema.org",
-  // Kata Containers (CNCF; per-container microVM OCI runtime)
-  "katacontainers.io",
   // Kernel
   "kernel.org",
   "www.kernel.org",
@@ -137,11 +132,6 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   "attack.mitre.org",
   // MLX (Apple ML framework docs)
   "ml-explore.github.io",
-  // Modal (serverless container/GPU runtime; hosted sandbox option)
-  "modal.com",
-  // Multipass (Canonical; cross-platform Ubuntu VMs via Hypervisor.framework /
-  // KVM / Hyper-V)
-  "multipass.run",
   // NIST (CSRC for FIPS/SP800 crypto refs; NVD for CVE detail lookups)
   "csrc.nist.gov",
   "nvd.nist.gov",
@@ -157,8 +147,6 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   // OWASP (cheat sheets, ASVS, Top 10; security-review-expert)
   "cheatsheetseries.owasp.org",
   "owasp.org",
-  // Podman (and Podman-machine; macOS backend uses krunkit/libkrun)
-  "docs.podman.io",
   // Prettier (formatter config; linter and TS extension tooling)
   "prettier.io",
   // Python (stdlib docs + PEPs)
@@ -166,10 +154,6 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   "peps.python.org",
   // pytest (fixture/marker docs)
   "docs.pytest.org",
-  // QEMU (cross-platform reference hypervisor; HVF/KVM/WHPX accelerators)
-  "qemu.org",
-  "wiki.qemu.org",
-  "www.qemu.org",
   // Rust (stdlib + cargo + edition guides; crate API docs; crate metadata)
   "crates.io",
   "doc.rust-lang.org",
@@ -188,11 +172,6 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
   "discourse.ubuntu.com",
   // vcluster
   "vcluster.com",
-  // Wasmer (WASM runtime; cross-platform WASI sandbox)
-  "docs.wasmer.io",
-  "wasmer.io",
-  // WasmEdge (CNCF WASM runtime; cross-platform WASI sandbox)
-  "wasmedge.org",
 ]);
 
 function refusal(url: string, reason: string) {
@@ -212,12 +191,158 @@ function refusal(url: string, reason: string) {
   };
 }
 
-function parseUrl(raw: string): URL | { error: string } {
+export function parseUrl(raw: string): URL | { error: string } {
   try {
     return new URL(raw);
   } catch (err) {
     return { error: `not a valid URL (${(err as Error).message})` };
   }
+}
+
+type Refusal = ReturnType<typeof refusal>;
+
+/**
+ * Resolve one 3xx hop. Returns the refusal to surface, or the next URL to
+ * fetch. Each hop's host and scheme are re-validated against the allowlist so
+ * an allowlisted host cannot open-redirect the fetch off the allowlist.
+ *
+ * Extracted from execute() so the redirect policy is unit-testable without a
+ * live network or pi.registerTool (#826).
+ */
+export function resolveRedirect(
+  res: Response,
+  current: URL,
+  rawUrl: string,
+  visited: readonly string[],
+  hop: number,
+): { refusal: Refusal } | { next: URL } {
+  const location = res.headers.get("location");
+  if (!location) {
+    return {
+      refusal: refusal(
+        current.toString(),
+        `HTTP ${res.status} with no Location header`,
+      ),
+    };
+  }
+  if (hop === MAX_REDIRECTS) {
+    return {
+      refusal: refusal(
+        rawUrl,
+        `redirect limit (${MAX_REDIRECTS}) exceeded; chain: ${visited.join(" → ")} → ${location}`,
+      ),
+    };
+  }
+  let next: URL;
+  try {
+    next = new URL(location, current);
+  } catch (err) {
+    return {
+      refusal: refusal(
+        current.toString(),
+        `invalid redirect Location '${location}': ${(err as Error).message}`,
+      ),
+    };
+  }
+  if (next.protocol !== "https:") {
+    return {
+      refusal: refusal(
+        rawUrl,
+        `redirect to non-https URL '${next.toString()}' refused`,
+      ),
+    };
+  }
+  if (!ALLOWED_HOSTS.has(next.host)) {
+    return {
+      refusal: refusal(
+        rawUrl,
+        `redirect to non-allowlisted host '${next.host}' refused ` +
+          `(chain: ${visited.join(" → ")} → ${next.toString()})`,
+      ),
+    };
+  }
+  return { next };
+}
+
+/**
+ * Read a terminal 2xx body under the byte ceilings. Refuses early if the
+ * server advertises a Content-Length over HARD_BYTE_CEILING, and aborts the
+ * stream if the accumulated bytes cross that ceiling even when the server
+ * omits or lies about Content-Length. The body is buffered once and sliced at
+ * MAX_BODY_BYTES on truncation.
+ *
+ * Note: the truncation slice cuts at a byte boundary; `Buffer.toString('utf-8')`
+ * then substitutes U+FFFD for any incomplete trailing multi-byte sequence
+ * (it does not drop it). Output always stays within MAX_BODY_BYTES.
+ *
+ * Extracted from execute() so the ceiling/truncation math is unit-testable
+ * without a live network or pi.registerTool (#826).
+ */
+export async function readBodyBounded(
+  res: Response,
+  current: URL,
+): Promise<{ refusal: Refusal } | { body: string; fullBytes: number; truncated: boolean }> {
+  const contentLengthHeader = res.headers.get("content-length");
+  if (contentLengthHeader !== null) {
+    const advertised = Number.parseInt(contentLengthHeader, 10);
+    if (Number.isFinite(advertised) && advertised > HARD_BYTE_CEILING) {
+      return {
+        refusal: refusal(
+          current.toString(),
+          `response Content-Length ${advertised} exceeds hard ceiling ${HARD_BYTE_CEILING} bytes`,
+        ),
+      };
+    }
+  }
+
+  let buf: Buffer;
+  try {
+    const reader = res.body?.getReader();
+    if (!reader) {
+      // No streaming body (e.g. empty response) — fall back to text().
+      buf = Buffer.from(await res.text(), "utf-8");
+    } else {
+      const chunks: Buffer[] = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > HARD_BYTE_CEILING) {
+          try {
+            await reader.cancel();
+          } catch {
+            /* ignore cancel errors */
+          }
+          return {
+            refusal: refusal(
+              current.toString(),
+              `response body exceeded hard ceiling ${HARD_BYTE_CEILING} bytes mid-stream`,
+            ),
+          };
+        }
+        chunks.push(Buffer.from(value));
+      }
+      buf = Buffer.concat(chunks);
+    }
+  } catch (err) {
+    return {
+      refusal: refusal(
+        current.toString(),
+        `response body read failed: ${(err as Error).message}`,
+      ),
+    };
+  }
+
+  const fullBytes = buf.byteLength;
+  if (fullBytes > MAX_BODY_BYTES) {
+    return {
+      body: buf.subarray(0, MAX_BODY_BYTES).toString("utf-8"),
+      fullBytes,
+      truncated: true,
+    };
+  }
+  return { body: buf.toString("utf-8"), fullBytes, truncated: false };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -270,7 +395,9 @@ export default function (pi: ExtensionAPI) {
 
       // Manual redirect loop so each hop's host is re-validated against the
       // allowlist. Defeats open-redirect bypass (e.g. an allowlisted host's
-      // /url?q= redirector pointing to an arbitrary destination).
+      // /url?q= redirector pointing to an arbitrary destination). The per-hop
+      // policy and the body-ceiling/truncation math live in resolveRedirect()
+      // and readBodyBounded() so both are unit-testable without a network.
       let current: URL = parsed;
       const visited: string[] = [current.toString()];
       for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -294,42 +421,11 @@ export default function (pi: ExtensionAPI) {
 
         // Redirect: re-validate next host against allowlist before following.
         if (res.status >= 300 && res.status < 400) {
-          const location = res.headers.get("location");
-          if (!location) {
-            return refusal(
-              current.toString(),
-              `HTTP ${res.status} with no Location header`,
-            );
+          const outcome = resolveRedirect(res, current, rawUrl, visited, hop);
+          if ("refusal" in outcome) {
+            return outcome.refusal;
           }
-          if (hop === MAX_REDIRECTS) {
-            return refusal(
-              rawUrl,
-              `redirect limit (${MAX_REDIRECTS}) exceeded; chain: ${visited.join(" → ")} → ${location}`,
-            );
-          }
-          let next: URL;
-          try {
-            next = new URL(location, current);
-          } catch (err) {
-            return refusal(
-              current.toString(),
-              `invalid redirect Location '${location}': ${(err as Error).message}`,
-            );
-          }
-          if (next.protocol !== "https:") {
-            return refusal(
-              rawUrl,
-              `redirect to non-https URL '${next.toString()}' refused`,
-            );
-          }
-          if (!ALLOWED_HOSTS.has(next.host)) {
-            return refusal(
-              rawUrl,
-              `redirect to non-allowlisted host '${next.host}' refused ` +
-                `(chain: ${visited.join(" → ")} → ${next.toString()})`,
-            );
-          }
-          current = next;
+          current = outcome.next;
           visited.push(current.toString());
           continue;
         }
@@ -341,74 +437,11 @@ export default function (pi: ExtensionAPI) {
           );
         }
 
-        // Defense-in-depth pre-check: refuse early if the server advertises
-        // a body larger than our hard ceiling (8× the truncation cap). This
-        // bounds memory pressure from a misbehaving or compromised
-        // allowlisted host — `res.text()` below would otherwise buffer the
-        // full response before the truncation slice runs. Servers that omit
-        // Content-Length fall through to the streaming guard below.
-        const HARD_BYTE_CEILING = MAX_BODY_BYTES * 8;
-        const contentLengthHeader = res.headers.get("content-length");
-        if (contentLengthHeader !== null) {
-          const advertised = Number.parseInt(contentLengthHeader, 10);
-          if (Number.isFinite(advertised) && advertised > HARD_BYTE_CEILING) {
-            return refusal(
-              current.toString(),
-              `response Content-Length ${advertised} exceeds hard ceiling ${HARD_BYTE_CEILING} bytes`,
-            );
-          }
+        const outcome = await readBodyBounded(res, current);
+        if ("refusal" in outcome) {
+          return outcome.refusal;
         }
-
-        // Terminal 2xx response — read body via streaming reader so we can
-        // abort if accumulated bytes exceed the hard ceiling even when the
-        // server omits Content-Length or lies about it.
-        let body: string;
-        let fullBytes: number;
-        let truncated = false;
-        try {
-          const reader = res.body?.getReader();
-          if (!reader) {
-            // No streaming body (e.g. empty response) — fall back to text().
-            body = await res.text();
-            fullBytes = Buffer.byteLength(body, "utf-8");
-          } else {
-            const chunks: Uint8Array[] = [];
-            let received = 0;
-             
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              received += value.byteLength;
-              if (received > HARD_BYTE_CEILING) {
-                try {
-                  await reader.cancel();
-                } catch {
-                  /* ignore cancel errors */
-                }
-                return refusal(
-                  current.toString(),
-                  `response body exceeded hard ceiling ${HARD_BYTE_CEILING} bytes mid-stream`,
-                );
-              }
-              chunks.push(value);
-            }
-            const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
-            fullBytes = buf.byteLength;
-            body = buf.toString("utf-8");
-          }
-        } catch (err) {
-          return refusal(
-            current.toString(),
-            `response body read failed: ${(err as Error).message}`,
-          );
-        }
-        if (fullBytes > MAX_BODY_BYTES) {
-          // Truncate at byte boundary, then trim to a valid UTF-8 boundary by
-          // round-tripping through Buffer.
-          const buf = Buffer.from(body, "utf-8").subarray(0, MAX_BODY_BYTES);
-          body = buf.toString("utf-8");
-          truncated = true;
-        }
+        const { body, fullBytes, truncated } = outcome;
 
         const chainNote =
           visited.length > 1
@@ -437,7 +470,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       // Unreachable: the loop body either returns or continues; MAX_REDIRECTS
-      // exhaustion returns inside the redirect branch.
+      // exhaustion returns inside resolveRedirect's hop-limit branch.
       return refusal(rawUrl, "internal: redirect loop exited unexpectedly");
     },
   });
