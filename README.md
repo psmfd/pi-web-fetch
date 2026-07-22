@@ -276,6 +276,17 @@ flowchart LR
     Targets --- Sanitize
 ```
 
+## Proxy support
+
+`web_fetch` runs on pi's runtime, which is **bun-compiled** (`bun build --compile`). Bun's `fetch` honors the `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` environment variables (both cases) **natively** — so if pi is launched in an environment where those are set, `web_fetch` routes through the operator's proxy with no flag, dependency, or config. Subagent child `pi` processes inherit the same variables through the strict-env allowlist (`subagent/sanitize-env.ts`, #606), so a spawned subagent's `web_fetch` shares the parent's egress path (investigated and confirmed in #827).
+
+Two things are unchanged by proxying:
+
+- The **host allowlist still gates the destination**, not the proxy. Only allowlisted hosts are ever requested — directly or through the proxy — and each redirect hop is re-validated. A proxy does not widen the reachable host set.
+- No proxy authentication is read or stored (consistent with "No authenticated fetches" below); proxy auth, if any, must live in the proxy URL the operator exports.
+
+Runtime caveat: the bun-native behavior is what makes this work out of the box. If this extension is ever loaded under a **Node** runtime instead of bun, Node's global `fetch` (undici) does **not** honor these env vars without `NODE_USE_ENV_PROXY` (a launch-time flag) or an explicit dispatcher — so proxying would silently not apply there.
+
 ## What this extension explicitly does NOT do
 
 - **No search.** There is no `web_search` tool. Agents must know the URL or follow links inside fetched documents. This is a deliberate scope boundary; the design implications of adding search (allowlist erosion via attacker-influenced URL discovery, query exfiltration to a third-party search provider, citation-replay break) are documented in [ADR-0015](https://github.com/psmfd/pi-config/blob/main/adrs/0015-network-capable-extensions-and-the-first-party-docs-allowlist.md) § Rejected.
